@@ -10,6 +10,7 @@ import android.net.Uri
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Environment
+import android.os.PersistableBundle
 import android.provider.MediaStore
 import android.util.Log
 import androidx.activity.result.contract.ActivityResultContract
@@ -24,14 +25,20 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
+    private var bitmapView: Bitmap? = null
+
     private val cameraLauncher = registerForActivityResult(Contract()) {
         it?.let { outPut ->
-//            binding.imageView.setImageBitmap(outPut.bitmap)
-            setPic(outPut.photoPath)
-        }
+            if(outPut.confirmed) {
+                setPic()
+            } else {
+                Log.d("MainActivity cameraLauncher", "cameraLauncher is not confirmed")
+            }
+        } ?: Log.d("MainActivity cameraLauncher", "cameraLauncher bad result")
     }
+    private var currentPhotoPath: String = ""
 
-    private fun setPic(currentPhotoPath: String) {
+    private fun setPic() {
         // Get the dimensions of the View
         val targetW: Int = binding.imageView.width
         val targetH: Int = binding.imageView.height
@@ -51,9 +58,10 @@ class MainActivity : AppCompatActivity() {
             // Decode the image file into a Bitmap sized to fill the View
             inJustDecodeBounds = false
             inSampleSize = scaleFactor
-            inPurgeable = true
         }
-        BitmapFactory.decodeFile(currentPhotoPath, bmOptions)?.also { bitmap ->
+
+        BitmapFactory.decodeFile(currentPhotoPath, bmOptions)?.also { bitmap: Bitmap ->
+            bitmapView = bitmap
             binding.imageView.setImageBitmap(bitmap)
         }
     }
@@ -64,43 +72,70 @@ class MainActivity : AppCompatActivity() {
             setContentView(root)
         }
 
+        savedInstanceState?.also {
+            binding.imageView.setImageBitmap(it.getParcelable("bitmapView"))
+        }
+
         binding.button.setOnClickListener {
-            cameraLauncher.launch(getExternalFilesDir(Environment.DIRECTORY_PICTURES))
+            createPhotoFile()?.also { photoFile->
+                cameraLauncher.launch(photoFile)
+            } ?: Log.d("MainActivity createPhotoFile", "createPhotoFile is null")
+        }
+
+        binding.buttonDF.setOnClickListener {
+            if (currentPhotoPath.isNotEmpty()){
+                val file = File(currentPhotoPath)
+                if(file.exists()){
+                    if(file.delete()) {
+                        Log.d("MainActivity buttonDF.setOnClickListener", "file.delete")
+                    }
+                }
+            }
         }
     }
 
+    private fun createPhotoFile() : File? {
+        val storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+        return  try {
+            // Create an image file name
+            val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
+            return File.createTempFile(
+                "JPEG_${timeStamp}_", /* prefix */
+                ".jpg", /* suffix */
+                storageDir /* directory */
+            ).apply {
+                // Save a file: path for use with ACTION_VIEW intents
+                currentPhotoPath = absolutePath
+                binding.textView.text = currentPhotoPath
+            }
+        } catch (ex: IOException) {
+            null
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle, outPersistentState: PersistableBundle) {
+        super.onSaveInstanceState(outState, outPersistentState)
+        outState.putParcelable("bitmapView", bitmapView)
+    }
 }
 
 data class Output(
-//    val bitmap: Bitmap? = null,
-    val confirmed: Boolean,
-    val photoPath: String = ""
+    val confirmed: Boolean
 )
 
 class Contract : ActivityResultContract<File, Output>() {
 
-    private var currentPhotoPath: String = ""
-
     override fun parseResult(resultCode: Int, data: Intent?): Output? {
-//        if (data == null) return null
-//        val bitmap = data.extras?.get("data") ?: return null
-
         val confirmed = resultCode == RESULT_OK
-//        return Output(bitmap as Bitmap, confirmed, currentPhotoPath)
-        return Output(confirmed, currentPhotoPath)
+        return Output(confirmed)
     }
 
-    override fun createIntent(context: Context, input: File): Intent {
+    override fun createIntent(context: Context, photoFile: File): Intent {
 
         val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-        // Create the File where the photo should go
-        val photoFile: File? = try {
-            createImageFile(input)
-        } catch (ex: IOException) {
-            null
-        }
+
         // Continue only if the File was successfully created
-        photoFile?.also {
+        photoFile.also {
             val photoURI: Uri = FileProvider.getUriForFile(
                 context,
                 "com.example.android.fileprovider",
@@ -112,19 +147,5 @@ class Contract : ActivityResultContract<File, Output>() {
         return intent
     }
 
-    @SuppressLint("SimpleDateFormat")
-    @Throws(IOException::class)
-    fun createImageFile(storageDir: File): File {
-        // Create an image file name
-        val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
-        return File.createTempFile(
-            "JPEG_${timeStamp}_", /* prefix */
-            ".jpg", /* suffix */
-            storageDir /* directory */
-        ).apply {
-            // Save a file: path for use with ACTION_VIEW intents
-            currentPhotoPath = absolutePath
-        }
-    }
 }
 
